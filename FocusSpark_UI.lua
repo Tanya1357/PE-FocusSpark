@@ -22,7 +22,7 @@ UI.LAYOUT_MODES = {
 -- 各布局的窗口尺寸
 UI.LAYOUT_SIZES = {
     normal = { width = 350, height = 480 },
-    embedded = { width = 400, height = 60 },  -- 横向长条形
+    embedded = { width = 400, height = 50 },  -- 横向长条形（紧凑高度）
 }
 
 -- 获取当前布局的窗口尺寸
@@ -82,7 +82,7 @@ function UI.drawNormal(ctx, state)
     reaper.ImGui_Spacing(ctx)
     
     -- ========== 进度区域 ==========
-    UI.drawProgressArea(ctx, draw_list, state, content_width)
+    UI.drawProgressArea(ctx, draw_list, state, content_width, actions)
     
     reaper.ImGui_Spacing(ctx)
     reaper.ImGui_Separator(ctx)
@@ -343,7 +343,8 @@ end
 -- ============================================
 -- 进度区域
 -- ============================================
-function UI.drawProgressArea(ctx, draw_list, state, width)
+function UI.drawProgressArea(ctx, draw_list, state, width, actions)
+    actions = actions or {}
     local x, y = reaper.ImGui_GetCursorScreenPos(ctx)
     local progress = State.getProgress(state)
     local cat_state = State.suggestCatState(state)
@@ -362,6 +363,25 @@ function UI.drawProgressArea(ctx, draw_list, state, width)
     local percent_w = reaper.ImGui_CalcTextSize(ctx, percent_text)
     reaper.ImGui_SetCursorScreenPos(ctx, x + width - percent_w - 25, y + 2)  -- 留空间给鱼干图标
     reaper.ImGui_Text(ctx, percent_text)
+    
+    -- 添加不可见按钮来检测滚轮（覆盖整个进度条区域）
+    reaper.ImGui_SetCursorScreenPos(ctx, x, y)
+    reaper.ImGui_InvisibleButton(ctx, "##progress_area", width, bar_height)
+    
+    -- 检测滚轮调整目标数量
+    if reaper.ImGui_IsItemHovered(ctx) then
+        local wheel = reaper.ImGui_GetMouseWheel(ctx)
+        if wheel ~= 0 then
+            local new_target = state.target_total + (wheel > 0 and 1 or -1)
+            new_target = math.max(0, math.min(999, new_target))  -- 限制范围 0-999
+            if new_target ~= state.target_total then
+                table.insert(actions, { type = "setTarget", value = new_target })
+            end
+        end
+        
+        -- 工具提示
+        reaper.ImGui_SetTooltip(ctx, "滚动鼠标滚轮调整目标数量\n当前: " .. state.target_total .. " 个样本")
+    end
     
     -- 预留空间
     reaper.ImGui_SetCursorScreenPos(ctx, x, y + bar_height + 5)
@@ -704,8 +724,7 @@ function UI.drawEmbedded(ctx, state)
     
     -- 基础组件尺寸（固定）
     local cat_width = 50
-    local timer_width = 90
-    local btn_width = 70
+    local btn_width = 90  -- 按钮宽度增加，因为要显示时间
     local progress_min_width = 60
     
     -- 计算间距和进度条宽度
@@ -716,7 +735,7 @@ function UI.drawEmbedded(ctx, state)
         progress_width = state.embedded_layout_progress_width or progress_min_width
     else
         -- 自适应模式：根据可用空间动态调整间距
-        local components_width = cat_width + timer_width + btn_width + progress_min_width
+        local components_width = cat_width + btn_width + progress_min_width
         local available_space = content_width - components_width
         
         if available_space > 0 then
@@ -744,28 +763,26 @@ function UI.drawEmbedded(ctx, state)
         -- 这个值会在点击锁定时被使用
     end
     
-    -- 计算起始位置（垂直居中）
+    -- 计算起始位置（垂直居中，基于实际内容高度）
     local start_x, start_y = reaper.ImGui_GetCursorScreenPos(ctx)
-    local y_center = start_y + math.max(30, content_height / 2)
+    local actual_content_height = 50  -- 实际内容高度（猫咪50像素高）
+    -- 控制按钮高度22，所以内容从start_y开始，垂直居中在可用空间
+    local y_center = start_y + actual_content_height / 2
     
     -- 1. 猫咪（左侧）
     UI.drawCatEmbeddedHorizontal(ctx, draw_list, state, start_x, y_center - 25, cat_width, 50)
     
-    -- 2. 计时显示（中间左）
-    local timer_x = start_x + cat_width + spacing
-    UI.drawTimerEmbedded(ctx, state, timer_x, y_center - 12, timer_width, 24)
-    
-    -- 3. 按钮（中间右）
-    local btn_x = timer_x + timer_width + spacing
+    -- 2. 按钮（中间，包含时间显示）
+    local btn_x = start_x + cat_width + spacing
     UI.drawActionEmbedded(ctx, state, actions, btn_x, y_center - 20, btn_width, 40, is_completed)
     
-    -- 4. 进度（右侧，自适应宽度）
+    -- 3. 进度（右侧，自适应宽度）
     local progress_x = btn_x + btn_width + spacing
-    UI.drawProgressEmbeddedHorizontal(ctx, draw_list, state, progress_x, y_center - 10, progress_width, 20)
+    UI.drawProgressEmbeddedHorizontal(ctx, draw_list, state, progress_x, y_center - 10, progress_width, 20, actions)
     
-    -- 预留空间
-    reaper.ImGui_SetCursorScreenPos(ctx, start_x, start_y + content_height)
-    reaper.ImGui_Dummy(ctx, content_width, content_height)
+    -- 只预留实际需要的最小空间（不预留整个content_height）
+    reaper.ImGui_SetCursorScreenPos(ctx, start_x, start_y + actual_content_height)
+    reaper.ImGui_Dummy(ctx, content_width, 0)  -- 不预留垂直空间，让窗口自动适应内容
     
     return actions
 end
@@ -776,17 +793,16 @@ function UI.drawEmbeddedControls(ctx, state, actions, content_width)
     
     -- 计算当前的自适应布局参数（用于锁定时的记录）
     local cat_width = 50
-    local timer_width = 90
-    local btn_width = 70
+    local btn_width = 90
     local progress_min_width = 60
-    local components_width = cat_width + timer_width + btn_width + progress_min_width
+    local components_width = cat_width + btn_width + progress_min_width
     local available_space = content_width - components_width
     
     local current_spacing = 8
     local current_progress_width = progress_min_width
     
     if available_space > 0 then
-        local spacing_count = 3
+        local spacing_count = 2  -- 只有2个间距（猫咪-按钮，按钮-进度）
         local base_spacing = 4
         local extra_space = available_space - (base_spacing * spacing_count)
         
@@ -800,14 +816,14 @@ function UI.drawEmbeddedControls(ctx, state, actions, content_width)
         current_spacing = 2
     end
     
-    -- 锁定按钮（左侧）
+    -- 锁定按钮（左侧，小按钮）
     local lock_icon = state.embedded_layout_locked and "🔒" or "🔓"
     reaper.ImGui_SetCursorScreenPos(ctx, x, y)
     
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x00000000)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x44444444)
     
-    if reaper.ImGui_Button(ctx, lock_icon, 22, 22) then
+    if reaper.ImGui_Button(ctx, lock_icon, 20, 20) then
         -- 如果正在锁定，传递当前的布局参数
         if not state.embedded_layout_locked then
             table.insert(actions, { 
@@ -827,13 +843,13 @@ function UI.drawEmbeddedControls(ctx, state, actions, content_width)
         reaper.ImGui_SetTooltip(ctx, tooltip)
     end
     
-    -- 布局切换按钮（右侧）
-    reaper.ImGui_SetCursorScreenPos(ctx, x + content_width - 25, y)
+    -- 布局切换按钮（右侧，小按钮）
+    reaper.ImGui_SetCursorScreenPos(ctx, x + content_width - 22, y)
     
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x00000000)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x44444444)
     
-    if reaper.ImGui_Button(ctx, "📋", 22, 22) then
+    if reaper.ImGui_Button(ctx, "📋", 20, 20) then
         table.insert(actions, { type = "setLayoutMode", value = "normal" })
     end
     
@@ -843,8 +859,8 @@ function UI.drawEmbeddedControls(ctx, state, actions, content_width)
         reaper.ImGui_SetTooltip(ctx, "切换到普通模式")
     end
     
-    -- 重置光标位置
-    reaper.ImGui_SetCursorScreenPos(ctx, x, y)
+    -- 重置光标位置到控制按钮下方，为内容留出空间
+    reaper.ImGui_SetCursorScreenPos(ctx, x, y + 22)
 end
 
 -- 嵌入式猫咪（横向，左侧）
@@ -939,7 +955,7 @@ function UI.drawTimerEmbedded(ctx, state, x, y, width, height)
     reaper.ImGui_TextColored(ctx, text_color, display_text)
 end
 
--- 嵌入式按钮（横向）
+-- 嵌入式按钮（横向，包含时间显示和滚轮调整）
 function UI.drawActionEmbedded(ctx, state, actions, x, y, width, height, is_completed)
     reaper.ImGui_SetCursorScreenPos(ctx, x, y)
     
@@ -949,18 +965,42 @@ function UI.drawActionEmbedded(ctx, state, actions, x, y, width, height, is_comp
     end
     
     if state.is_working then
-        -- DONE 按钮
-        local elapsed = reaper.time_precise() - state.current_work_start
+        -- DONE 按钮（显示时间）
+        local now = reaper.time_precise()
+        local elapsed = now - state.current_work_start
         local button_color = COLORS.accent
+        local display_text = ""
+        local text_color = 0x000000FF
         
         if state.current_work_estimated_duration > 0 then
             local estimated_sec = state.current_work_estimated_duration * 60
-            local progress = elapsed / estimated_sec
-            if progress >= 0.95 then
+            local remaining = estimated_sec - elapsed
+            
+            if remaining > 0 then
+                local remaining_min = math.floor(remaining / 60)
+                local remaining_sec = math.floor(remaining % 60)
+                display_text = string.format("DONE\n%02d:%02d", remaining_min, remaining_sec)
+                
+                local progress = elapsed / estimated_sec
+                if progress >= 0.95 then
+                    button_color = COLORS.danger
+                    text_color = 0xFFFFFFFF
+                elseif progress >= 0.9 then
+                    button_color = COLORS.warning
+                    text_color = 0x000000FF
+                end
+            else
+                local overtime = -remaining
+                local overtime_min = math.floor(overtime / 60)
+                local overtime_sec = math.floor(overtime % 60)
+                display_text = string.format("DONE\n+%02d:%02d", overtime_min, overtime_sec)
                 button_color = COLORS.danger
-            elseif progress >= 0.9 then
-                button_color = COLORS.warning
+                text_color = 0xFFFFFFFF
             end
+        else
+            local elapsed_min = math.floor(elapsed / 60)
+            local elapsed_sec = math.floor(elapsed % 60)
+            display_text = string.format("DONE\n%02d:%02d", elapsed_min, elapsed_sec)
         end
         
         if is_completed then
@@ -977,22 +1017,29 @@ function UI.drawActionEmbedded(ctx, state, actions, x, y, width, height, is_comp
         else
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), button_color)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), button_color | 0x00000020)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x000000FF)
+            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), text_color)
             
-            if reaper.ImGui_Button(ctx, "DONE", width, height) then
-                table.insert(actions, { type = "done", time = reaper.time_precise() })
+            if reaper.ImGui_Button(ctx, display_text, width, height) then
+                table.insert(actions, { type = "done", time = now })
             end
             
             reaper.ImGui_PopStyleColor(ctx, 3)
         end
     else
-        -- 开始按钮
+        -- 开始按钮（显示预计耗时，支持滚轮调整）
+        local estimated_duration = state.last_estimated_duration or 0
+        local button_text = "⏱ 开始"
+        
+        if estimated_duration > 0 then
+            button_text = string.format("⏱ 开始\n%d分", estimated_duration)
+        end
+        
         if is_completed then
             -- 已完成所有目标，禁用按钮
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x444444FF)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x444444FF)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x888888FF)
-            reaper.ImGui_Button(ctx, "开始", width, height)
+            reaper.ImGui_Button(ctx, button_text, width, height)
             reaper.ImGui_PopStyleColor(ctx, 3)
             
             if reaper.ImGui_IsItemHovered(ctx) then
@@ -1003,11 +1050,30 @@ function UI.drawActionEmbedded(ctx, state, actions, x, y, width, height, is_comp
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xA8E6CFFF)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x000000FF)
             
-            if reaper.ImGui_Button(ctx, "开始", width, height) then
+            if reaper.ImGui_Button(ctx, button_text, width, height) then
                 table.insert(actions, { 
                     type = "startWork", 
-                    estimated_duration = state.last_estimated_duration > 0 and state.last_estimated_duration or nil
+                    estimated_duration = estimated_duration > 0 and estimated_duration or nil
                 })
+            end
+            
+            -- 滚轮调整预计耗时
+            if reaper.ImGui_IsItemHovered(ctx) then
+                local wheel = reaper.ImGui_GetMouseWheel(ctx)
+                if wheel ~= 0 then
+                    local new_duration = estimated_duration + (wheel > 0 and 1 or -1)
+                    new_duration = math.max(0, math.min(60, new_duration))
+                    if new_duration ~= estimated_duration then
+                        table.insert(actions, { type = "setLastEstimatedDuration", value = new_duration })
+                    end
+                end
+                
+                local tooltip = "开始制作新样本的计时\n"
+                if estimated_duration > 0 then
+                    tooltip = tooltip .. "预计: " .. estimated_duration .. " 分钟\n"
+                end
+                tooltip = tooltip .. "在按钮上滚动鼠标滚轮调整预计耗时"
+                reaper.ImGui_SetTooltip(ctx, tooltip)
             end
             
             reaper.ImGui_PopStyleColor(ctx, 3)
@@ -1016,7 +1082,8 @@ function UI.drawActionEmbedded(ctx, state, actions, x, y, width, height, is_comp
 end
 
 -- 嵌入式进度（横向，右侧）
-function UI.drawProgressEmbeddedHorizontal(ctx, draw_list, state, x, y, width, height)
+function UI.drawProgressEmbeddedHorizontal(ctx, draw_list, state, x, y, width, height, actions)
+    actions = actions or {}
     local progress = 0
     if state.target_total > 0 then
         progress = math.min(1, state.completed_count / state.target_total)
@@ -1039,6 +1106,25 @@ function UI.drawProgressEmbeddedHorizontal(ctx, draw_list, state, x, y, width, h
     -- 根据进度选择文字颜色（确保可见性）
     local text_color = progress > 0.5 and 0xFFFFFFFF or COLORS.text_bright
     reaper.ImGui_TextColored(ctx, text_color, progress_text)
+    
+    -- 添加不可见按钮来检测滚轮（覆盖整个进度条区域）
+    reaper.ImGui_SetCursorScreenPos(ctx, x, y)
+    reaper.ImGui_InvisibleButton(ctx, "##progress_embedded", width, height)
+    
+    -- 检测滚轮调整目标数量
+    if reaper.ImGui_IsItemHovered(ctx) then
+        local wheel = reaper.ImGui_GetMouseWheel(ctx)
+        if wheel ~= 0 then
+            local new_target = state.target_total + (wheel > 0 and 1 or -1)
+            new_target = math.max(0, math.min(999, new_target))  -- 限制范围 0-999
+            if new_target ~= state.target_total then
+                table.insert(actions, { type = "setTarget", value = new_target })
+            end
+        end
+        
+        -- 工具提示
+        reaper.ImGui_SetTooltip(ctx, "滚动鼠标滚轮调整目标数量\n当前: " .. state.target_total .. " 个样本")
+    end
 end
 
 -- ============================================

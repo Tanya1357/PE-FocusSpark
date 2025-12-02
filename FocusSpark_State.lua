@@ -85,7 +85,7 @@ function State.reduce(state, action)
         new_state.work_end_time = action.value or "18:00"
         
     elseif action.type == "setSessionStart" then
-        new_state.session_start = action.value or reaper.time_precise()
+        new_state.session_start = action.value or os.time()  -- 使用系统时间戳
         
     elseif action.type == "startWork" then
         -- 检查是否已完成所有目标
@@ -103,23 +103,26 @@ function State.reduce(state, action)
             new_state.last_estimated_duration = estimated
         end
         
-    elseif action.type == "done" then
-        -- 记录完成（必须先开始计时）
+    elseif action.type == "cancelWork" then
+        -- 取消当前计时（不计入完成）
         if not state.is_working then return state end  -- 如果未开始计时，忽略
         
+        new_state.is_working = false
+        new_state.current_work_start = 0
+        new_state.current_work_estimated_duration = 0
+        new_state.cat_state = "idle"
+        new_state.status_message = "计时已取消"
+        
+    elseif action.type == "done" then
+        -- 记录完成（独立于计时）
         -- 检查是否已完成所有目标
         if state.target_total > 0 and state.completed_count >= state.target_total then
             return state  -- 已完成所有目标，不允许再完成
         end
         
-        local now = action.time or reaper.time_precise()
+        local now = action.time or os.time()  -- 使用系统时间戳
         new_state.completed_count = new_state.completed_count + 1
         new_state.remaining_items = new_state.target_total - new_state.completed_count
-        
-        -- 停止计时
-        new_state.is_working = false
-        new_state.current_work_start = 0
-        new_state.current_work_estimated_duration = 0
         
         -- 添加完成时间记录（只保留最近50条，避免数组过大）
         local times = {}
@@ -151,8 +154,37 @@ function State.reduce(state, action)
         if #times >= 2 then
             local total_time = times[#times] - times[1]
             new_state.avg_time_per_item = total_time / (#times - 1)
-        elseif new_state.session_start > 0 then
-            new_state.avg_time_per_item = now - new_state.session_start
+        else
+            -- 只有一条记录时，无法计算平均耗时，保持为0
+            new_state.avg_time_per_item = 0
+        end
+        
+    elseif action.type == "undoDone" then
+        -- 撤销完成（减少完成数）
+        if state.completed_count <= 0 then
+            return state  -- 已经是0，不能再减
+        end
+        
+        new_state.completed_count = new_state.completed_count - 1
+        new_state.remaining_items = new_state.target_total - new_state.completed_count
+        
+        -- 移除最后一条完成时间记录
+        local times = {}
+        local old_times = state.completion_times or {}
+        for i = 1, #old_times - 1 do
+            table.insert(times, old_times[i])
+        end
+        new_state.completion_times = times
+        
+        -- 重置连击计数（撤销后连击中断）
+        new_state.combo_count = 0
+        
+        -- 重新计算平均耗时
+        if #times >= 2 then
+            local total_time = times[#times] - times[1]
+            new_state.avg_time_per_item = total_time / (#times - 1)
+        else
+            new_state.avg_time_per_item = 0
         end
         
     elseif action.type == "setCatState" then
@@ -221,7 +253,7 @@ function State.reduce(state, action)
         
     elseif action.type == "updateEstimate" then
         -- 更新时间估算
-        local now = reaper.time_precise()
+        local now = os.time()  -- 使用系统时间戳，而不是 reaper.time_precise()
         local remaining = new_state.target_total - new_state.completed_count
         new_state.remaining_items = remaining
         
@@ -249,7 +281,7 @@ function State.reduce(state, action)
         new_state.combo_count = 0
         new_state.combo_max = 0
         new_state.last_done_time = 0
-        new_state.session_start = reaper.time_precise()
+        new_state.session_start = os.time()  -- 使用系统时间戳
         new_state.avg_time_per_item = 0
         new_state.estimated_finish = 0
         new_state.remaining_items = new_state.target_total
@@ -326,9 +358,9 @@ end
 
 -- 获取猫咪应该的状态（基于当前情况）
 function State.suggestCatState(state)
-    local now = reaper.time_precise()
+    local now = os.time()  -- 使用系统时间戳，与 last_done_time 保持一致
     
-    -- 刚完成任务：兴奋
+    -- 刚完成任务：兴奋（3秒内）
     if state.last_done_time > 0 and (now - state.last_done_time) < 3 then
         if state.combo_count >= 5 then
             return "excited"  -- 大连击，超级兴奋
@@ -337,9 +369,9 @@ function State.suggestCatState(state)
         end
     end
     
-    -- 计时器状态检查（优先级高）
+    -- 计时器状态检查（优先级高）- 这里需要用 reaper.time_precise() 因为 current_work_start 用的是它
     if state.is_working and state.current_work_start > 0 then
-        local elapsed = now - state.current_work_start
+        local elapsed = reaper.time_precise() - state.current_work_start
         
         -- 如果有预计耗时，检查是否超时或接近超时
         if state.current_work_estimated_duration > 0 then

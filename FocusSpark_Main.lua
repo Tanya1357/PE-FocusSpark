@@ -113,7 +113,7 @@ local function init()
                 })
             end
         end
-        state = State.reduce(state, { type = "setSessionStart", value = reaper.time_precise() })
+        state = State.reduce(state, { type = "setSessionStart", value = os.time() })
     end
 end
 
@@ -132,7 +132,11 @@ local function handleAction(action)
     state = State.reduce(state, action)
     
     -- 特殊处理
-    if action.type == "startWork" then
+    if action.type == "cancelWork" then
+        -- 取消计时时的处理
+        state = State.reduce(state, { type = "setCatState", value = "idle" })
+        
+    elseif action.type == "startWork" then
         -- 开始计时时的处理
         state = State.reduce(state, { type = "setCatState", value = "happy" })
         -- 如果设置了预计耗时，立即保存设置（因为会更新 last_estimated_duration）
@@ -147,6 +151,12 @@ local function handleAction(action)
                 embedded_layout_locked = state.embedded_layout_locked,
             })
         end
+        
+    elseif action.type == "undoDone" then
+        -- 撤销完成时的处理
+        state = State.reduce(state, { type = "updateEstimate" })
+        state = State.reduce(state, { type = "setCatState", value = "idle" })
+        pending_save = true
         
     elseif action.type == "done" then
         -- 更新估算

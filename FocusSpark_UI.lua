@@ -467,167 +467,176 @@ end
 -- 操作按钮
 -- ============================================
 function UI.drawActions(ctx, state, actions, width)
-    local btn_width = (width - 20) / 2
-    local btn_height = state.is_working and 60 or 50  -- 计时中需要更多空间显示时间
+    -- 三个按钮：计时、完成、重置
+    local btn_spacing = 10
+    local btn_width = (width - btn_spacing * 2) / 3
+    local btn_height = 50
     
     -- 检查是否已完成所有目标
     local is_completed = state.target_total > 0 and state.completed_count >= state.target_total
     
+    -- ===== 计时按钮 =====
     if state.is_working then
-        -- ===== 正在计时：显示 DONE 按钮和倒计时 =====
+        -- 正在计时：显示计时中状态和时间
         local elapsed = reaper.time_precise() - state.current_work_start
         local elapsed_min = math.floor(elapsed / 60)
         local elapsed_sec = math.floor(elapsed % 60)
-        local elapsed_text = string.format("%02d:%02d", elapsed_min, elapsed_sec)
         
-        -- 计算倒计时或已用时间
         local display_text = ""
-        local time_color = COLORS.accent
         local button_color = COLORS.accent
         
         if state.current_work_estimated_duration > 0 then
-            -- 有预计耗时：显示倒计时
             local estimated_sec = state.current_work_estimated_duration * 60
             local remaining = estimated_sec - elapsed
-            local remaining_min = math.floor(remaining / 60)
-            local remaining_sec = math.floor(remaining % 60)
             
             if remaining > 0 then
-                display_text = string.format("剩余 %02d:%02d", remaining_min, remaining_sec)
-                -- 剩余时间少于10%时变橙色，少于5%时变红色
+                local remaining_min = math.floor(remaining / 60)
+                local remaining_sec = math.floor(remaining % 60)
+                display_text = string.format("⏱ %02d:%02d", remaining_min, remaining_sec)
+                
                 local progress = elapsed / estimated_sec
                 if progress >= 0.95 then
-                    time_color = COLORS.danger
                     button_color = COLORS.danger
                 elseif progress >= 0.9 then
-                    time_color = COLORS.warning
                     button_color = COLORS.warning
                 end
             else
-                -- 超时了
-                local overtime_min = math.floor(-remaining / 60)
-                local overtime_sec = math.floor(-remaining % 60)
-                display_text = string.format("超时 +%02d:%02d", overtime_min, overtime_sec)
-                time_color = COLORS.danger
+                local overtime = -remaining
+                local overtime_min = math.floor(overtime / 60)
+                local overtime_sec = math.floor(overtime % 60)
+                display_text = string.format("⏱ +%02d:%02d", overtime_min, overtime_sec)
                 button_color = COLORS.danger
             end
         else
-            -- 没有预计耗时：显示已用时间
-            display_text = "已用 " .. elapsed_text
+            display_text = string.format("⏱ %02d:%02d", elapsed_min, elapsed_sec)
         end
         
-        -- DONE 按钮（主按钮）
-        if is_completed then
-            -- 已完成所有目标，禁用按钮
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x444444FF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x444444FF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x888888FF)
-            reaper.ImGui_Button(ctx, "✅ DONE!\n" .. display_text, btn_width, btn_height)
-            reaper.ImGui_PopStyleColor(ctx, 3)
-            
-            if reaper.ImGui_IsItemHovered(ctx) then
-                reaper.ImGui_SetTooltip(ctx, "已完成所有目标！\n请重置目标或调整目标数量")
-            end
-        else
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), button_color)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), button_color | 0x00000020)  -- 稍微变亮
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x000000FF)
-            
-            local done_text = "✅ DONE!\n" .. display_text
-            if reaper.ImGui_Button(ctx, done_text, btn_width, btn_height) then
-                table.insert(actions, { type = "done", time = reaper.time_precise() })
-            end
-            
-            reaper.ImGui_PopStyleColor(ctx, 3)
-            
-            if reaper.ImGui_IsItemHovered(ctx) then
-                local tooltip = "完成当前样本！\n已用时: " .. elapsed_text
-                if state.current_work_estimated_duration > 0 then
-                    tooltip = tooltip .. "\n预计: " .. state.current_work_estimated_duration .. "分钟"
-                end
-                reaper.ImGui_SetTooltip(ctx, tooltip)
-            end
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), button_color)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), button_color | 0x00000020)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x000000FF)
+        
+        if reaper.ImGui_Button(ctx, display_text, btn_width, btn_height) then
+            table.insert(actions, { type = "cancelWork" })
         end
         
+        reaper.ImGui_PopStyleColor(ctx, 3)
+        
+        if reaper.ImGui_IsItemHovered(ctx) then
+            local tooltip = "点击取消计时\n已用时: " .. string.format("%02d:%02d", elapsed_min, elapsed_sec)
+            if state.current_work_estimated_duration > 0 then
+                tooltip = tooltip .. "\n预计: " .. state.current_work_estimated_duration .. "分钟"
+            end
+            reaper.ImGui_SetTooltip(ctx, tooltip)
+        end
     else
-        -- ===== 未开始：显示开始计时按钮 =====
-        -- 预计耗时（通过滚轮在按钮上调整）
+        -- 未开始：显示开始计时按钮
         local current_input = state.last_estimated_duration or 0
         
-        -- 开始计时按钮（支持滚轮调整预计耗时）
-        if is_completed then
-            -- 已完成所有目标，禁用按钮
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x444444FF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x444444FF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x888888FF)
+        -- 获取按钮位置
+        local btn_x, btn_y = reaper.ImGui_GetCursorScreenPos(ctx)
+        
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x555555FF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x666666FF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x00000000)  -- 隐藏默认文字
+        
+        -- 空白按钮
+        if reaper.ImGui_Button(ctx, "##timer_btn", btn_width, btn_height) then
+            table.insert(actions, { 
+                type = "startWork", 
+                estimated_duration = current_input > 0 and current_input or nil
+            })
+        end
+        
+        reaper.ImGui_PopStyleColor(ctx, 3)
+        
+        -- 手动绘制居中文字
+        local draw_list = reaper.ImGui_GetWindowDrawList(ctx)
+        local line1 = "⏱ 计时"
+        local line1_w = reaper.ImGui_CalcTextSize(ctx, line1)
+        
+        if current_input > 0 then
+            -- 两行文字
+            local line2 = current_input .. "分"
+            local line2_w = reaper.ImGui_CalcTextSize(ctx, line2)
+            local line_height = 18
+            local total_height = line_height * 2
+            local start_y = btn_y + (btn_height - total_height) / 2
             
-            local start_text = "⏱ 开始计时"
-            if current_input > 0 then
-                start_text = start_text .. "\n预计 " .. current_input .. " 分钟"
-            end
-            
-            reaper.ImGui_Button(ctx, start_text, btn_width, btn_height)
-            reaper.ImGui_PopStyleColor(ctx, 3)
-            
-            if reaper.ImGui_IsItemHovered(ctx) then
-                reaper.ImGui_SetTooltip(ctx, "已完成所有目标！\n请重置目标或调整目标数量")
-            end
+            reaper.ImGui_DrawList_AddText(draw_list, btn_x + (btn_width - line1_w) / 2, start_y, 0xFFFFFFFF, line1)
+            reaper.ImGui_DrawList_AddText(draw_list, btn_x + (btn_width - line2_w) / 2, start_y + line_height, 0xFFFFFFFF, line2)
         else
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), COLORS.success)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xA8E6CFFF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x000000FF)
+            -- 单行文字
+            local text_h = 18
+            reaper.ImGui_DrawList_AddText(draw_list, btn_x + (btn_width - line1_w) / 2, btn_y + (btn_height - text_h) / 2, 0xFFFFFFFF, line1)
+        end
+        
+        if reaper.ImGui_IsItemHovered(ctx) then
+            local wheel = reaper.ImGui_GetMouseWheel(ctx)
+            if wheel ~= 0 then
+                local new_value = current_input + (wheel > 0 and 1 or -1)
+                new_value = math.max(0, math.min(60, new_value))
+                if new_value ~= current_input then
+                    table.insert(actions, { type = "setLastEstimatedDuration", value = new_value })
+                end
+            end
             
-            local start_text = "⏱ 开始计时"
+            local tooltip = "开始计时（可用于任何事情）\n"
             if current_input > 0 then
-                start_text = start_text .. "\n预计 " .. current_input .. " 分钟"
+                tooltip = tooltip .. "预计: " .. current_input .. "分钟\n"
             end
-            
-            if reaper.ImGui_Button(ctx, start_text, btn_width, btn_height) then
-                table.insert(actions, { 
-                    type = "startWork", 
-                    estimated_duration = current_input > 0 and current_input or nil
-                })
-            end
-            
-            reaper.ImGui_PopStyleColor(ctx, 3)
-            
-            -- 检测滚轮事件（在按钮上）
-            if reaper.ImGui_IsItemHovered(ctx) then
-                local wheel = reaper.ImGui_GetMouseWheel(ctx)
-                if wheel ~= 0 then
-                    -- 滚轮调整预计耗时（0-60分钟）
-                    local new_value = current_input + (wheel > 0 and 1 or -1)
-                    new_value = math.max(0, math.min(60, new_value))
-                    if new_value ~= current_input then
-                        table.insert(actions, { type = "setLastEstimatedDuration", value = new_value })
-                    end
-                end
-                
-                -- 工具提示
-                local tooltip = "开始制作新样本的计时\n"
-                if current_input > 0 then
-                    tooltip = tooltip .. "预计: " .. current_input .. " 分钟\n"
-                end
-                tooltip = tooltip .. "在按钮上滚动鼠标滚轮调整预计耗时"
-                reaper.ImGui_SetTooltip(ctx, tooltip)
-            end
+            tooltip = tooltip .. "滚轮调整预计耗时"
+            reaper.ImGui_SetTooltip(ctx, tooltip)
         end
     end
     
     reaper.ImGui_SameLine(ctx)
     
-    -- 重置按钮
+    -- ===== 完成按钮 =====
+    if is_completed then
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x444444FF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x444444FF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x888888FF)
+        reaper.ImGui_Button(ctx, "✅ 完成", btn_width, btn_height)
+        reaper.ImGui_PopStyleColor(ctx, 3)
+        
+        if reaper.ImGui_IsItemHovered(ctx) then
+            reaper.ImGui_SetTooltip(ctx, "已完成所有目标！\n请重置或调整目标数量")
+        end
+    else
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), COLORS.success)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xA8E6CFFF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x000000FF)
+        
+        if reaper.ImGui_Button(ctx, "✅ 完成", btn_width, btn_height) then
+            table.insert(actions, { type = "done", time = os.time() })
+        end
+        
+        -- 右键撤销
+        if reaper.ImGui_IsItemClicked(ctx, 1) then  -- 1 = 右键
+            table.insert(actions, { type = "undoDone" })
+        end
+        
+        reaper.ImGui_PopStyleColor(ctx, 3)
+        
+        if reaper.ImGui_IsItemHovered(ctx) then
+            reaper.ImGui_SetTooltip(ctx, "左键: 完成+1\n右键: 撤销-1")
+        end
+    end
+    
+    reaper.ImGui_SameLine(ctx)
+    
+    -- ===== 重置按钮 =====
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x444444FF)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x555555FF)
     
-    if reaper.ImGui_Button(ctx, "🔄 重置今日", btn_width, btn_height) then
+    if reaper.ImGui_Button(ctx, "🔄 重置", btn_width, btn_height) then
         table.insert(actions, { type = "reset" })
     end
     
     reaper.ImGui_PopStyleColor(ctx, 2)
     
     if reaper.ImGui_IsItemHovered(ctx) then
-        reaper.ImGui_SetTooltip(ctx, "清零今日进度，重新开始")
+        reaper.ImGui_SetTooltip(ctx, "清零今日进度")
     end
 end
 
@@ -955,22 +964,28 @@ function UI.drawTimerEmbedded(ctx, state, x, y, width, height)
     reaper.ImGui_TextColored(ctx, text_color, display_text)
 end
 
--- 嵌入式按钮（横向，包含时间显示和滚轮调整）
+-- 嵌入式按钮（横向，计时和完成分离）
 function UI.drawActionEmbedded(ctx, state, actions, x, y, width, height, is_completed)
-    reaper.ImGui_SetCursorScreenPos(ctx, x, y)
+    -- 两个按钮：计时 + 完成
+    local btn_spacing = 4
+    local timer_width = width * 0.5 - btn_spacing / 2
+    local done_width = width * 0.5 - btn_spacing / 2
     
     -- 检查是否已完成所有目标（如果未传入参数，则计算）
     if is_completed == nil then
         is_completed = state.target_total > 0 and state.completed_count >= state.target_total
     end
     
+    -- ===== 计时按钮 =====
+    reaper.ImGui_SetCursorScreenPos(ctx, x, y)
+    
     if state.is_working then
-        -- DONE 按钮（显示时间）
         local now = reaper.time_precise()
         local elapsed = now - state.current_work_start
+        local elapsed_min = math.floor(elapsed / 60)
+        local elapsed_sec = math.floor(elapsed % 60)
         local button_color = COLORS.accent
         local display_text = ""
-        local text_color = 0x000000FF
         
         if state.current_work_estimated_duration > 0 then
             local estimated_sec = state.current_work_estimated_duration * 60
@@ -979,104 +994,102 @@ function UI.drawActionEmbedded(ctx, state, actions, x, y, width, height, is_comp
             if remaining > 0 then
                 local remaining_min = math.floor(remaining / 60)
                 local remaining_sec = math.floor(remaining % 60)
-                display_text = string.format("DONE\n%02d:%02d", remaining_min, remaining_sec)
+                display_text = string.format("%02d:%02d", remaining_min, remaining_sec)
                 
                 local progress = elapsed / estimated_sec
                 if progress >= 0.95 then
                     button_color = COLORS.danger
-                    text_color = 0xFFFFFFFF
                 elseif progress >= 0.9 then
                     button_color = COLORS.warning
-                    text_color = 0x000000FF
                 end
             else
                 local overtime = -remaining
                 local overtime_min = math.floor(overtime / 60)
                 local overtime_sec = math.floor(overtime % 60)
-                display_text = string.format("DONE\n+%02d:%02d", overtime_min, overtime_sec)
+                display_text = string.format("+%02d:%02d", overtime_min, overtime_sec)
                 button_color = COLORS.danger
-                text_color = 0xFFFFFFFF
             end
         else
-            local elapsed_min = math.floor(elapsed / 60)
-            local elapsed_sec = math.floor(elapsed % 60)
-            display_text = string.format("DONE\n%02d:%02d", elapsed_min, elapsed_sec)
+            display_text = string.format("%02d:%02d", elapsed_min, elapsed_sec)
         end
         
-        if is_completed then
-            -- 已完成所有目标，禁用按钮
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x444444FF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x444444FF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x888888FF)
-            reaper.ImGui_Button(ctx, "DONE", width, height)
-            reaper.ImGui_PopStyleColor(ctx, 3)
-            
-            if reaper.ImGui_IsItemHovered(ctx) then
-                reaper.ImGui_SetTooltip(ctx, "已完成所有目标！")
-            end
-        else
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), button_color)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), button_color | 0x00000020)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), text_color)
-            
-            if reaper.ImGui_Button(ctx, display_text, width, height) then
-                table.insert(actions, { type = "done", time = now })
-            end
-            
-            reaper.ImGui_PopStyleColor(ctx, 3)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), button_color)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), button_color | 0x00000020)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x000000FF)
+        
+        if reaper.ImGui_Button(ctx, "⏱" .. display_text, timer_width, height) then
+            table.insert(actions, { type = "cancelWork" })
+        end
+        
+        reaper.ImGui_PopStyleColor(ctx, 3)
+        
+        if reaper.ImGui_IsItemHovered(ctx) then
+            reaper.ImGui_SetTooltip(ctx, "点击取消计时")
         end
     else
-        -- 开始按钮（显示预计耗时，支持滚轮调整）
         local estimated_duration = state.last_estimated_duration or 0
-        local button_text = "⏱ 开始"
-        
+        local button_text = "⏱"
         if estimated_duration > 0 then
-            button_text = string.format("⏱ 开始\n%d分", estimated_duration)
+            button_text = button_text .. estimated_duration .. "分"
         end
         
-        if is_completed then
-            -- 已完成所有目标，禁用按钮
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x444444FF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x444444FF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x888888FF)
-            reaper.ImGui_Button(ctx, button_text, width, height)
-            reaper.ImGui_PopStyleColor(ctx, 3)
-            
-            if reaper.ImGui_IsItemHovered(ctx) then
-                reaper.ImGui_SetTooltip(ctx, "已完成所有目标！")
-            end
-        else
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), COLORS.success)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xA8E6CFFF)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x000000FF)
-            
-            if reaper.ImGui_Button(ctx, button_text, width, height) then
-                table.insert(actions, { 
-                    type = "startWork", 
-                    estimated_duration = estimated_duration > 0 and estimated_duration or nil
-                })
-            end
-            
-            -- 滚轮调整预计耗时
-            if reaper.ImGui_IsItemHovered(ctx) then
-                local wheel = reaper.ImGui_GetMouseWheel(ctx)
-                if wheel ~= 0 then
-                    local new_duration = estimated_duration + (wheel > 0 and 1 or -1)
-                    new_duration = math.max(0, math.min(60, new_duration))
-                    if new_duration ~= estimated_duration then
-                        table.insert(actions, { type = "setLastEstimatedDuration", value = new_duration })
-                    end
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x555555FF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x666666FF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0xFFFFFFFF)
+        
+        if reaper.ImGui_Button(ctx, button_text, timer_width, height) then
+            table.insert(actions, { 
+                type = "startWork", 
+                estimated_duration = estimated_duration > 0 and estimated_duration or nil
+            })
+        end
+        
+        reaper.ImGui_PopStyleColor(ctx, 3)
+        
+        if reaper.ImGui_IsItemHovered(ctx) then
+            local wheel = reaper.ImGui_GetMouseWheel(ctx)
+            if wheel ~= 0 then
+                local new_duration = estimated_duration + (wheel > 0 and 1 or -1)
+                new_duration = math.max(0, math.min(60, new_duration))
+                if new_duration ~= estimated_duration then
+                    table.insert(actions, { type = "setLastEstimatedDuration", value = new_duration })
                 end
-                
-                local tooltip = "开始制作新样本的计时\n"
-                if estimated_duration > 0 then
-                    tooltip = tooltip .. "预计: " .. estimated_duration .. " 分钟\n"
-                end
-                tooltip = tooltip .. "在按钮上滚动鼠标滚轮调整预计耗时"
-                reaper.ImGui_SetTooltip(ctx, tooltip)
             end
-            
-            reaper.ImGui_PopStyleColor(ctx, 3)
+            reaper.ImGui_SetTooltip(ctx, "开始计时\n滚轮调整时长")
+        end
+    end
+    
+    -- ===== 完成按钮 =====
+    reaper.ImGui_SetCursorScreenPos(ctx, x + timer_width + btn_spacing, y)
+    
+    if is_completed then
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x444444FF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x444444FF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x888888FF)
+        reaper.ImGui_Button(ctx, "✅", done_width, height)
+        reaper.ImGui_PopStyleColor(ctx, 3)
+        
+        if reaper.ImGui_IsItemHovered(ctx) then
+            reaper.ImGui_SetTooltip(ctx, "已完成所有目标！")
+        end
+    else
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), COLORS.success)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xA8E6CFFF)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0x000000FF)
+        
+        if reaper.ImGui_Button(ctx, "✅", done_width, height) then
+            table.insert(actions, { type = "done", time = os.time() })
+        end
+        
+        -- 右键撤销
+        if reaper.ImGui_IsItemClicked(ctx, 1) then  -- 1 = 右键
+            table.insert(actions, { type = "undoDone" })
+        end
+        
+        reaper.ImGui_PopStyleColor(ctx, 3)
+        
+        if reaper.ImGui_IsItemHovered(ctx) then
+            reaper.ImGui_SetTooltip(ctx, "左键+1 | 右键-1")
         end
     end
 end
